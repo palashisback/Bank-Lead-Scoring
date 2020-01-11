@@ -1,0 +1,446 @@
+---
+title: "Lead Scoring using CRM Data"
+author: "Palash Jain"
+date: "1/11/2020"
+output: slidy_presentation
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F,warning = F,message = F,cache = T)
+library(openxlsx)
+library(rpart)
+library(rpart.plot)
+library(tidyverse)
+library(cowplot)
+library(caret)
+library(knitr)
+library(kableExtra)
+```
+# CRM data contains basic information about Customers
+
+The CRM data for many companies consists of similar information with only one or two domain specific fields. Some fields included are :
+
+- Age
+- Marital status
+- Bank Balance
+- Education Levels
+- Conversion
+
+```{R Functions}
+# Defining Functions
+
+cont_quant_20 <- function(x){
+  cut(x,breaks = c(quantile(x,probs = seq(0,1,0.05),na.rm =T)),include.lowest = T,na.rm =T)
+}
+
+cont_quant_5 <- function(x){
+  cut(x,breaks = c(quantile(x,na.rm=T,probs = c(0,0.2,0.4,0.6,0.8,1))),include.lowest = T,na.rm =T,dig.lab = 10)
+}
+
+cont_quant_6 <- function(x){
+  cut(x,breaks = c(quantile(x,probs = c(0,0.17,0.34,0.5,0.67,0.84,1),na.rm=T)),include.lowest = T,na.rm =T,dig.lab = 10)
+}
+
+cont_quant_4 <- function(x){
+  cut(x,breaks = c(quantile(x,probs = c(0,0.6,0.8,1),na.rm =T)),include.lowest = T,na.rm =T)
+}
+
+cont_quant_4_1 <- function(x){
+  cut(x,breaks = c(quantile(x,probs = c(0,0.8,0.9,1),na.rm =T)),include.lowest = T,na.rm =T)
+}
+
+cont_quant_4_2 <- function(x){
+  cut(x,breaks = c(quantile(x,probs = c(0,0.9,0.95,1),na.rm =T)),include.lowest = T,na.rm =T)
+}
+
+draw_confusion_matrix <- function(cm) {
+
+  layout(matrix(c(1,1,2)))
+  par(mar=c(2,2,2,2))
+  plot(c(100, 345), c(300, 450), type = "n", xlab="", ylab="", xaxt='n', yaxt='n')
+  title('CONFUSION MATRIX', cex.main=2)
+
+  # create the matrix 
+  rect(150, 430, 240, 370, col='#3F97D0')
+  text(195, 435, '0', cex=1.2)
+  rect(250, 430, 340, 370, col='#F7AD50')
+  text(295, 435, '1', cex=1.2)
+  text(125, 370, 'Predicted', cex=1.3, srt=90, font=2)
+  text(245, 450, 'Actual', cex=1.3, font=2)
+  rect(150, 305, 240, 365, col='#F7AD50')
+  rect(250, 305, 340, 365, col='#3F97D0')
+  text(140, 400, '0', cex=1.2, srt=90)
+  text(140, 335, '1', cex=1.2, srt=90)
+
+  # add in the cm results 
+  res <- as.numeric(cm$table)
+  text(195, 400, res[1], cex=1.6, font=2, col='white')
+  text(195, 335, res[2], cex=1.6, font=2, col='white')
+  text(295, 400, res[3], cex=1.6, font=2, col='white')
+  text(295, 335, res[4], cex=1.6, font=2, col='white')
+
+  # add in the specifics 
+  plot(c(100, 0), c(100, 0), type = "n", xlab="", ylab="", main = "DETAILS", xaxt='n', yaxt='n')
+  text(10, 85, names(cm$byClass[1]), cex=1.2, font=2)
+  text(10, 70, round(as.numeric(cm$byClass[1]), 3), cex=1.2)
+  text(30, 85, names(cm$byClass[2]), cex=1.2, font=2)
+  text(30, 70, round(as.numeric(cm$byClass[2]), 3), cex=1.2)
+  text(50, 85, names(cm$byClass[5]), cex=1.2, font=2)
+  text(50, 70, round(as.numeric(cm$byClass[5]), 3), cex=1.2)
+  text(70, 85, names(cm$byClass[6]), cex=1.2, font=2)
+  text(70, 70, round(as.numeric(cm$byClass[6]), 3), cex=1.2)
+  text(90, 85, names(cm$byClass[7]), cex=1.2, font=2)
+  text(90, 70, round(as.numeric(cm$byClass[7]), 3), cex=1.2)
+
+  # add in the accuracy information 
+  text(30, 35, names(cm$overall[1]), cex=1.5, font=2)
+  text(30, 20, round(as.numeric(cm$overall[1]), 3), cex=1.4)
+  text(70, 35, names(cm$overall[2]), cex=1.5, font=2)
+  text(70, 20, round(as.numeric(cm$overall[2]), 3), cex=1.4)
+} 
+
+data <- read.xlsx('bank-full.xlsx')
+
+kable(head(data),row.names = T) %>% kable_styling(c('bordered','striped'),font_size = 12)
+```
+
+
+# Initial Lead Conversion Rate is ~12%
+
+
+```{R Loading Data}
+conv_table <- data %>% group_by(y) %>% summarise(Cases = n(),Proportion = n()/nrow(data))
+data$y <- ifelse(data$y == 'yes',1,0)
+data[,c('job','marital','education','default','housing',
+        'loan','contact','month','poutcome')] <- sapply(data[,c('job','marital','education','default','housing',
+        'loan','contact','month','poutcome')],factor)
+conv_rate <- mean(data$y) * 100
+
+high_rate <- conv_rate + 2
+low_rate <- conv_rate - 2
+
+ggplot(data = conv_table,aes(x = y,y = Proportion*100,label = round(Proportion*100,1)))+
+  geom_bar(stat = 'identity',fill = 'gold') +
+  geom_text(position = position_stack(vjust = 0.5)) +
+  theme_bw() +
+  xlab('Converted') +
+  ylab('Percentage') +
+  coord_cartesian(ylim = c(0,100))
+```
+
+```{R EDA}
+fac <- function(x,i){
+  name <- names(data)[x]
+  y <- data[,c(name,'y')]
+  names(y) <- c('variable','flag')
+  p <- mutate(y,variable = as.character(variable)) %>%
+   filter(!is.na(variable))%>%
+   group_by(variable)%>%
+   summarise(defaults = sum(as.numeric(as.character(flag))),counted = n()) %>%
+   mutate(proportion = round(defaults*100/counted,2))%>%
+   mutate(color = ifelse(proportion >= high_rate,'limegreen','gold')) %>%
+   mutate(color = ifelse(proportion <= low_rate, 'tomato',color))
+  normalizer <-  max(p$counted)/max(p$proportion)
+  top_3 <- p %>%
+    arrange(desc(proportion)) %>%
+    filter(proportion > high_rate)
+  if (nrow(top_3) > 3){  
+    top_3 <- top_3[1:3,]
+}
+  top <- ifelse(nrow(top_3) > 0,paste(top_3$variable,collapse = ', '),'none')
+  bottom_3 <- p %>%
+    arrange(proportion) %>%
+    filter(proportion < low_rate)
+  if (nrow(bottom_3) > 3){
+    bottom_3 <- bottom_3[1:3,]
+  }
+  bottom <- ifelse(nrow(bottom_3) > 0,paste(bottom_3$variable,collapse = ', '),'none')
+  captioned <- paste0('The buckets with high default rate are ',top,'\n The buckets with low default rate are ',bottom, '\n \n ')    
+  ggplot(data = p,aes(x = variable,y = counted)) +
+      geom_bar(stat = 'identity',position = 'stack',width = 0.6,fill = p$color)+
+      geom_line(aes(x = variable,y = proportion * normalizer,group = 1)) + 
+      geom_point(aes(x = variable,y = proportion *normalizer,group = 1)) +
+      geom_text(aes(x = variable,y = proportion * normalizer,group = 1,label =proportion),vjust=-1) +
+      geom_hline(yintercept = conv_rate * normalizer,linetype = 'dashed',col = 'black') +
+      geom_hline(yintercept = high_rate * normalizer,linetype = 'dashed',col = 'tomato') +
+      geom_hline(yintercept = low_rate * normalizer,linetype = 'dashed',col = 'blue') +
+      scale_y_continuous(sec.axis = sec_axis(~./normalizer,name = 'Case Proportion')) +
+      ylab('Case count') +
+      xlab(paste(name)) +
+      labs(caption = captioned) +
+      ggtitle(paste0(i,'. Exploratory Plot for ',name)) +
+      theme_bw() +
+      theme(axis.text.x = element_text(angle = 285,vjust = -1),
+            plot.caption = element_text(hjust = 0.5),
+            plot.title = element_text(hjust = 0.5)) +
+      coord_cartesian(ylim = c(0,max(p$counted) + 2000) )
+}
+
+```
+
+```{R}
+cont_quantile_6 <- function(x,i){
+  name<-names(data)[x]
+  y <- data[,c(name,'y')]
+  names(y) <- c('name','flag')
+  
+  y$variable_5 <- cont_quant_5(y[,1])
+  y$variable_6 <- cont_quant_6(y[,1])
+  a <- filter(y,!is.na(name)) %>%
+    group_by(variable_5)%>%
+    summarise(defaults = sum(as.numeric(as.character(flag))),counted = n()) %>%
+    mutate(proportion = round(defaults*100/counted,2)) %>%
+    mutate(color = ifelse(proportion >= high_rate,'limegreen','gold')) %>%
+    mutate(color = ifelse(proportion <= low_rate, 'tomato',color))
+    normalized <-  max(a$counted)/max(a$proportion)
+    top_3 <- a %>%
+    arrange(desc(proportion)) %>%
+    filter(proportion > high_rate)
+  if (nrow(top_3) > 3){  
+    top_3 <- top_3[1:3,]
+}
+  top <- ifelse(nrow(top_3) > 0,paste(top_3$variable_5,collapse = ', '),'none')
+  bottom_3 <- a %>%
+    arrange(proportion) %>%
+    filter(proportion < low_rate)
+  if (nrow(bottom_3) > 3){
+    bottom_3 <- bottom_3[1:3,]
+  }
+  bottom <- ifelse(nrow(bottom_3) > 0,paste(bottom_3$variable_5,collapse = ', '),'none')
+  captioned <- paste0('The buckets with high default rate are ',top,'\n The buckets with low default rate are ',bottom, '\n \n ')    
+  p1<-ggplot(data = a,aes(x = variable_5,y = counted)) +
+      geom_bar(stat = 'identity',position = 'stack',width = 0.6,fill = a$color)+
+      geom_line(aes(x = variable_5,y = proportion * normalized,group = 1)) + 
+      geom_point(aes(x = variable_5,y = proportion * normalized,group = 1)) +
+      geom_text(aes(x = variable_5,y = proportion * normalized,group = 1,label =proportion),vjust=-2) +
+      geom_hline(yintercept = conv_rate * normalized,linetype = 'dashed',col = 'black') +
+      geom_hline(yintercept = high_rate * normalized,linetype = 'dashed',col = 'tomato') +
+      geom_hline(yintercept = low_rate * normalized,linetype = 'dashed',col = 'blue') +
+      scale_y_continuous(sec.axis = sec_axis(~./normalized,name = 'Case Proportion')) +
+      ylab('Case count') +
+      xlab(paste(name)) +
+      ggtitle(paste0(i,'B','. Plot for ',name,' with 5 buckets')) +
+      labs(caption = captioned) +
+      theme_bw() +
+      theme(axis.text.x = element_text(angle = 300,vjust = -1),
+            plot.caption = element_text(hjust = 0.5,size = 7),
+            plot.title = element_text(size = 10)) +
+      coord_cartesian(ylim = c(0,max(a$counted) + 2500)) 
+  
+   b <- filter(y,!is.na(name)) %>%
+    group_by(variable_6)%>%
+    summarise(defaults = sum(as.numeric(as.character(flag))),counted = n()) %>%
+    mutate(proportion = round(defaults*100/counted,2)) %>%
+    mutate(color = ifelse(proportion >= high_rate,'limegreen','gold'))%>%
+    mutate(color = ifelse(proportion <= low_rate, 'tomato',color))
+    normalizer <-  max(b$counted)/max(b$proportion)
+    top_3 <- b %>%
+    arrange(desc(proportion)) %>%
+    filter(proportion > high_rate)
+  if (nrow(top_3) > 3){  
+    top_3 <- top_3[1:3,]
+}
+  top <- ifelse(nrow(top_3) > 0,paste(top_3$variable_6,collapse = ', '),'none')
+  bottom_3 <- b %>%
+    arrange(proportion) %>%
+    filter(proportion < low_rate)
+  if (nrow(bottom_3) > 3){
+    bottom_3 <- bottom_3[1:3,]
+  }
+  bottom <- ifelse(nrow(bottom_3) > 0,paste(bottom_3$variable_6,collapse = ', '),'none')
+    captioned <- paste0('The buckets with high default rate are ',top,'\n The buckets with low default rate are ',bottom, '\n \n ')   
+  p2<-ggplot(data = b,aes(x = variable_6,y = counted)) +
+      geom_bar(stat = 'identity',position = 'stack',width = 0.6,fill = b$color)+
+      geom_line(aes(x = variable_6,y = proportion *normalizer,group = 1)) + 
+      geom_point(aes(x = variable_6,y = proportion *normalizer,group = 1)) +
+      geom_text(aes(x = variable_6,y = proportion * normalizer,group = 1,label =proportion),vjust=-2) +
+      geom_hline(yintercept = conv_rate * normalizer,linetype = 'dashed',col = 'black') +
+      geom_hline(yintercept = high_rate * normalizer,linetype = 'dashed',col = 'tomato') +
+      geom_hline(yintercept = low_rate * normalizer,linetype = 'dashed',col = 'blue') +
+      scale_y_continuous(sec.axis = sec_axis(~./normalizer,name = 'Case Proportion')) +
+      ylab('Case count') +
+      xlab(paste(name)) +
+      ggtitle(paste0(i,'A','. Plot for ',name,' with 6 buckets')) +
+      labs(caption = captioned) +
+      theme_bw() +
+      theme(axis.text.x = element_text(angle = 300,vjust = -1),
+            plot.caption = element_text(hjust = 0.5,size = 7),
+            plot.title = element_text(size = 10)) +
+      coord_cartesian(ylim = c(0,max(b$counted) + 2500) ) 
+  plot_grid(p2,p1)
+}
+```
+
+
+```{R}
+cont_4 <- function(x,i){
+  name<-names(data)[x]
+  y <- data[,c(name,'y')]
+  names(y) <- c('variable','flag')
+  
+  y$variable <- cont_quant_4_1(y[,1])
+  p <- group_by(y,variable)%>%
+    summarise(defaults = sum(as.numeric(as.character(flag))),counted = n()) %>%
+    mutate(proportion = round(defaults*100/counted,2))%>%
+    mutate(color = ifelse(proportion >= high_rate,'limegreen','gold')) %>%
+    mutate(color = ifelse(proportion <= low_rate,'tomato',color))
+  normalizer <-  max(p$counted)/max(p$proportion)
+  top_3 <- p %>%
+    arrange(desc(proportion)) %>%
+    filter(proportion > high_rate)
+  if (nrow(top_3) > 3){  
+    top_3 <- top_3[1:3,]
+}
+  top <- ifelse(nrow(top_3) > 0,paste(top_3$variable,collapse = ', '),'none')
+  bottom_3 <- p %>%
+    arrange(proportion) %>%
+    filter(proportion < low_rate)
+  if (nrow(bottom_3) > 3){
+    bottom_3 <- bottom_3[1:3,]
+  }
+  bottom <- ifelse(nrow(bottom_3) > 0,paste(bottom_3$variable,collapse = ', '),'none')
+  captioned <- paste0('The subcategories with high default rate are ',top,'\n The buckets with low default rate are ',bottom, '\n \n ')    
+  ggplot(data = p,aes(x = variable,y = counted)) +
+      geom_bar(stat = 'identity',position = 'stack',width = 0.6,fill = p$color)+
+      geom_line(aes(x = variable,y = proportion *normalizer,group = 1)) + 
+      geom_point(aes(x = variable,y = proportion *normalizer,group = 1)) +
+      geom_text(aes(x = variable,y = proportion * normalizer,group = 1,label =proportion),vjust=-2) +
+      geom_hline(yintercept = conv_rate * normalizer,linetype = 'dashed',col = 'black') +
+      geom_hline(yintercept = high_rate * normalizer,linetype = 'dashed',col = 'tomato') +
+      geom_hline(yintercept = low_rate * normalizer,linetype = 'dashed',col = 'blue') +
+      scale_y_continuous(sec.axis = sec_axis(~./normalizer,name = 'Case Proportion')) +
+      ylab('Case count') +
+      xlab(paste(name)) +
+      ggtitle(paste(i)) +
+      labs(caption = captioned)+
+      theme_bw()+
+      theme(axis.text.x = element_text(angle = 285,vjust = -1),plot.caption = element_text(hjust = 0.5)) +
+      coord_cartesian(ylim = c(0,max(p$counted) + 5000) )
+}
+
+
+cont_4_1 <- function(x,i){
+  name<-names(data)[x]
+  y <- data[,c(name,'y')]
+  names(y) <- c('variable','flag')
+  
+  y$variable <- cont_quant_4_2(y[,1])
+  p <- group_by(y,variable)%>%
+    summarise(defaults = sum(as.numeric(as.character(flag))),counted = n()) %>%
+    mutate(proportion = round(defaults*100/counted,2)) %>%
+    mutate(color = ifelse(proportion >= high_rate,'limegreen','gold')) %>%
+    mutate(color = ifelse(proportion <= low_rate,'tomato',color))
+  normalizer <-  max(p$counted)/max(p$proportion)
+  top_3 <- p %>%
+    arrange(desc(proportion)) %>%
+    filter(proportion > high_rate)
+  if (nrow(top_3) > 3){  
+    top_3 <- top_3[1:3,]
+}
+  top <- ifelse(nrow(top_3) > 0,paste(top_3$variable,collapse = ', '),'none')
+  bottom_3 <- p %>%
+    arrange(proportion) %>%
+    filter(proportion < low_rate)
+  if (nrow(bottom_3) > 3){
+    bottom_3 <- bottom_3[1:3,]
+  }
+  bottom <- ifelse(nrow(bottom_3) > 0,paste(bottom_3$variable,collapse = ', '),'none')
+  captioned <- paste0('The subcategories with high default rate are ',top,'\n The buckets with low default rate are ',bottom, '\n \n ')    
+  ggplot(data = p,aes(x = variable,y = counted)) +
+      geom_bar(stat = 'identity',position = 'stack',width = 0.6,fill = p$color)+
+      geom_line(aes(x = variable,y = proportion *normalizer,group = 1)) + 
+      geom_point(aes(x = variable,y = proportion *normalizer,group = 1)) +
+      geom_text(aes(x = variable,y = proportion * normalizer,group = 1,label =proportion),vjust=-2) +
+      geom_hline(yintercept = conv_rate * normalizer,linetype = 'dashed',col = 'black') +
+      geom_hline(yintercept = high_rate * normalizer,linetype = 'dashed',col = 'tomato') +
+      geom_hline(yintercept = low_rate * normalizer,linetype = 'dashed',col = 'blue') +
+      scale_y_continuous(sec.axis = sec_axis(~./normalizer,name = 'Case Proportion')) +
+      ylab('Case count') +
+      xlab(paste(name)) +
+      ggtitle(paste(i)) +
+      labs(caption = captioned)+
+      theme_bw()+
+      theme(axis.text.x = element_text(angle = 285,vjust = -1),plot.caption = element_text(hjust = 0.5)) +
+      coord_cartesian(ylim = c(0,max(p$counted) + 5000) )
+}
+```
+
+```{R EDA on Categorical}
+chars <- which(sapply(data,is.character))
+data[,chars] <- lapply(data[,chars],factor)
+nums <- which(!sapply(data,is.character))
+```
+
+
+```{R,include = F}
+
+for(i in 1:length(chars)){
+  print(fac(x = chars[i],i=i))
+}
+
+nums <- c(1,6,10,12)
+
+for(i in 1:length(nums)){
+  print(cont_quantile_6(x = nums[i],i=i))
+}
+
+nums <- c(13)
+
+for(i in 1:length(nums)){
+  print(cont_4(x = nums[i],i=i))
+}
+
+
+nums <- c(14,15)
+
+for(i in 1:length(nums)){
+  print(cont_4_1(x = nums[i],i=i))
+}
+```
+
+```{R For Model}
+data <- data[,-c(10,11,12)]
+intrain <- createDataPartition(data$y,p = 0.65,list = F)
+train <- data[intrain,]
+test <- data[-intrain,]
+
+
+fit <- glm(y~.,data = train,family = 'binomial')
+```
+
+```{R}
+pred_train <- predict(fit,train,type = 'response')
+pred_train <- ifelse(pred_train > 0.25, 1, 0)
+draw_confusion_matrix(confusionMatrix(data = factor(pred_train),reference = factor(train$y),positive = '1'))
+```
+
+```{R}
+pred_test <- predict(fit,test,type = 'response')
+pred_test <- ifelse(pred_test > 0.25, 1, 0)
+draw_confusion_matrix(confusionMatrix(data = factor(pred_test),reference = factor(test$y),positive = '1'))
+```
+
+# Appendix
+
+# Bank client data:
+- age (numeric)
+- job : type of job (categorical: 'admin.','blue-collar','entrepreneur','housemaid','management','retired','self-employed','services','student','technician','unemployed','unknown')
+- marital : marital status (categorical: 'divorced','married','single','unknown'; note: 'divorced' means divorced or widowed)
+- education (categorical: 'basic.4y','basic.6y','basic.9y','high.school','illiterate','professional.course','university.degree','unknown')
+- default: has credit in default? (categorical: 'no','yes','unknown')
+- housing: has housing loan? (categorical: 'no','yes','unknown')
+- loan: has personal loan? (categorical: 'no','yes','unknown')
+
+# Related with the last contact of the current campaign:
+- contact: contact communication type (categorical: 'cellular','telephone')
+- month: last contact month of year (categorical: 'jan', 'feb', 'mar', ..., 'nov', 'dec')
+- day_of_week: last contact day of the week (categorical: 'mon','tue','wed','thu','fri')
+- duration: last contact duration, in seconds (numeric). Important note: this attribute highly affects the output target (e.g., if duration=0 then y='no'). Yet, the duration is not known before a call is performed. Also, after the end of the call y is obviously known. Thus, this input should only be included for benchmark purposes and should be discarded if the intention is to have a realistic predictive model.
+
+# Other attributes:
+- campaign: number of contacts performed during this campaign and for this client (numeric, includes last contact)
+- pdays: number of days that passed by after the client was last contacted from a previous campaign (numeric; 999 means client was not previously contacted)
+- previous: number of contacts performed before this campaign and for this client (numeric)
+- poutcome: outcome of the previous marketing campaign (categorical: 'failure','nonexistent','success')
+
