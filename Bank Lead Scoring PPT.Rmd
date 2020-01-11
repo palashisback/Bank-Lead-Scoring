@@ -7,7 +7,7 @@ output: slidy_presentation
 
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = F,warning = F,message = F,cache = T)
+knitr::opts_chunk$set(echo = F,warning = F,message = F,cache = T,fig.align = 'center')
 library(openxlsx)
 library(rpart)
 library(rpart.plot)
@@ -17,7 +17,7 @@ library(caret)
 library(knitr)
 library(kableExtra)
 ```
-# CRM data contains basic information about Customers
+# CRM data contains basic information about past and potential Customers
 
 The CRM data for many companies consists of similar information with only one or two domain specific fields. Some fields included are :
 
@@ -106,8 +106,11 @@ kable(head(data),row.names = T) %>% kable_styling(c('bordered','striped'),font_s
 ```
 
 
-# Initial Lead Conversion Rate is ~12%
+# Lead Conversion Rates are typically quite low
 
+- Companies and organizations spend a large amount of money in discovering leads through marketing and advertising.
+- The process of lead covnersion is also very expensive.
+- Most leads never convert. For example in this data only 12% of the leads were converted.
 
 ```{R Loading Data}
 conv_table <- data %>% group_by(y) %>% summarise(Cases = n(),Proportion = n()/nrow(data))
@@ -126,8 +129,11 @@ ggplot(data = conv_table,aes(x = y,y = Proportion*100,label = round(Proportion*1
   theme_bw() +
   xlab('Converted') +
   ylab('Percentage') +
-  coord_cartesian(ylim = c(0,100))
+  coord_cartesian(ylim = c(0,100)) +
+  ggtitle('Lead Conversion Rate is ~12%')
 ```
+
+
 
 ```{R EDA}
 fac <- function(x,i){
